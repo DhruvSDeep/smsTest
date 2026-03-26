@@ -39,6 +39,7 @@ class TradingAgent(MesaAgent):
         model: MarketModel,
         strategy: "Optional[Strategy]" = None,
         initial_cash: float = 10000.0,
+        commodity: str = "",
         **kwargs,
     ):
         """Initialize the trading agent.
@@ -47,9 +48,13 @@ class TradingAgent(MesaAgent):
             model: The market model
             strategy: Trading strategy instance (optional)
             initial_cash: Starting cash balance
+            commodity: The commodity this agent trades
             **kwargs: Additional arguments for Mesa Agent
         """
         super().__init__(model, **kwargs)
+
+        # Commodity assignment
+        self.commodity: str = commodity
 
         # Portfolio state
         self.cash: float = initial_cash
@@ -72,15 +77,16 @@ class TradingAgent(MesaAgent):
     def _mark_price(self) -> float:
         """Return the best available price for marking the portfolio."""
         model = self.model
-        midprice = model.exchange.order_book.midprice
+        midprice = model.exchange.get_order_book(self.commodity).midprice
         if midprice is not None:
             return midprice
 
-        env_state = model.environment.get_state()
+        env = model.environments[self.commodity]
+        env_state = env.get_state()
         return (
             env_state.get("fundamental")
             or env_state.get("current_price")
-            or model.environment.initial_price
+            or env.initial_price
         )
 
     @property
@@ -90,7 +96,7 @@ class TradingAgent(MesaAgent):
             return 0.0
 
         model = self.model
-        midprice = model.exchange.order_book.midprice
+        midprice = model.exchange.get_order_book(self.commodity).midprice
         if midprice is None:
             return 0.0
 
@@ -140,14 +146,14 @@ class TradingAgent(MesaAgent):
         model: MarketModel = self.model
         exchange = model.exchange
 
-        # Get market state
-        market_state = exchange.get_market_state()
+        # Get market state for this agent's commodity
+        market_state = exchange.get_market_state(self.commodity)
 
         # Get depth snapshot
-        depth = exchange.get_depth_snapshot()
+        depth = exchange.get_depth_snapshot(self.commodity)
 
-        # Get reference price from environment (fallback when midprice unavailable)
-        env_state = model.environment.get_state()
+        # Get reference price from this commodity's environment
+        env_state = model.environments[self.commodity].get_state()
         reference_price = env_state.get("fundamental") or env_state.get("current_price")
 
         # Build observation
@@ -158,6 +164,7 @@ class TradingAgent(MesaAgent):
 
         return Observation(
             tick=market_state["tick"],
+            commodity=self.commodity,
             best_bid=market_state["best_bid"],
             best_ask=market_state["best_ask"],
             midprice=market_state["midprice"],
@@ -221,6 +228,7 @@ class TradingAgent(MesaAgent):
             side=request.side,
             order_type=request.order_type,
             quantity=request.quantity,
+            commodity=request.commodity or self.commodity,
             price=request.price,
         )
 
@@ -304,6 +312,7 @@ class TradingAgent(MesaAgent):
                 side=Side.BID,  # Side doesn't matter for cancel
                 order_type=OrderType.CANCEL,
                 quantity=0,
+                commodity=self.commodity,
             )
             cancel_order.order_id = order_id  # Set the order ID to cancel
 
@@ -321,6 +330,7 @@ class TradingAgent(MesaAgent):
         """
         return {
             "agent_id": self.unique_id,
+            "commodity": self.commodity,
             "cash": self.cash,
             "position": self.position,
             "initial_cash": self.initial_cash,

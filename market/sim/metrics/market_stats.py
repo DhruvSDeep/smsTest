@@ -179,6 +179,7 @@ def get_market_snapshot(
     exchange: "MatchingEngine",
     trade_history: List[Dict],
     price_history: List[float],
+    commodity: Optional[str] = None,
 ) -> MarketStats:
     """Get comprehensive market statistics.
 
@@ -186,12 +187,14 @@ def get_market_snapshot(
         exchange: The matching engine
         trade_history: Recent trade history
         price_history: Price history for volatility
+        commodity: Commodity to snapshot (defaults to first commodity)
 
     Returns:
         MarketStats snapshot
     """
-    market_state = exchange.get_market_state()
-    depth = exchange.get_depth_snapshot()
+    commodity = commodity or exchange.commodities[0]
+    market_state = exchange.get_market_state(commodity)
+    depth = exchange.get_depth_snapshot(commodity)
 
     # Get metrics
     best_bid = market_state["best_bid"]

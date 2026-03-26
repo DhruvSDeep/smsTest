@@ -48,6 +48,11 @@ class SimulationRunner:
         initial_price = kwargs.get("initial_price", self.config.market.initial_price)
         tick_interval = kwargs.get("tick_interval", self.config.exchange.tick_interval)
 
+        commodity_configs = [
+            {"name": c.name, "initial_price": c.initial_price, "initial_spread": c.initial_spread}
+            for c in self.config.market.commodities
+        ] if self.config.market.commodities else None
+
         model = MarketModel(
             seed=seed,
             num_agents=0 if self.config.agents else num_agents,
@@ -59,10 +64,12 @@ class SimulationRunner:
             enable_fundamentals=self.config.market.enable_fundamentals,
             enable_regimes=self.config.market.enable_regimes,
             regime_change_prob=self.config.market.regime_change_prob,
+            commodity_configs=commodity_configs,
         )
 
         if self.config.agents:
-            for agent_config in self.config.agents:
+            for i, agent_config in enumerate(self.config.agents):
+                commodity = model.commodities[i % len(model.commodities)]
                 strategy_kwargs = dict(agent_config.strategy_params)
                 strategy_kwargs.setdefault("seed", model.random.randrange(2**32))
                 strategy = model.strategy_loader.create(
@@ -71,8 +78,9 @@ class SimulationRunner:
                 model.add_agent(
                     strategy=strategy,
                     initial_cash=agent_config.initial_cash,
+                    commodity=commodity,
                 )
-            model._initialize_market(initial_price)
+            model._initialize_market()
 
         return model
 

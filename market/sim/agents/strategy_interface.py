@@ -38,6 +38,7 @@ class Observation:
     """
 
     tick: float
+    commodity: str
     best_bid: Optional[float]
     best_ask: Optional[float]
     midprice: Optional[float]
@@ -65,6 +66,7 @@ class OrderRequest:
     side: Side
     order_type: OrderType
     quantity: float
+    commodity: str = ""
     price: Optional[float] = None
 
 
@@ -174,6 +176,7 @@ class RandomStrategy(Strategy):
                 side=side,
                 order_type=OrderType.LIMIT,
                 quantity=quantity,
+                commodity=observation.commodity,
                 price=price,
             )
         ]

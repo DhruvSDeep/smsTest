@@ -118,6 +118,7 @@ class MarketMakerStrategy(Strategy):
                 side=Side.BID,
                 order_type=OrderType.LIMIT,
                 quantity=base_quantity,
+                commodity=observation.commodity,
                 price=bid_price,
             )
         )
@@ -128,6 +129,7 @@ class MarketMakerStrategy(Strategy):
                 side=Side.ASK,
                 order_type=OrderType.LIMIT,
                 quantity=base_quantity,
+                commodity=observation.commodity,
                 price=ask_price,
             )
         )

@@ -110,6 +110,7 @@ class LiquidityTakerStrategy(Strategy):
                 side=side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
+                commodity=observation.commodity,
                 price=None,  # Market orders don't need a price
             )
         ]

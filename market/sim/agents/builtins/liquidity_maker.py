@@ -134,6 +134,7 @@ class LiquidityMakerStrategy(Strategy):
                     side=side,
                     order_type=OrderType.LIMIT,
                     quantity=quantity,
+                    commodity=observation.commodity,
                     price=price,
                 )
             )

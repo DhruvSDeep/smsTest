@@ -8,10 +8,15 @@
     "price_precision": 4
   },
   "market": {
-    "initial_price": 100.0,
-    "initial_spread": 1.0,
     "enable_fundamentals": false,
-    "enable_regimes": false
+    "enable_regimes": false,
+    "commodities": [
+      {"name": "WHEAT",       "initial_price": 550.0,  "initial_spread": 2.0},
+      {"name": "CRUDE_OIL",   "initial_price": 75.0,   "initial_spread": 0.5},
+      {"name": "GOLD",        "initial_price": 1950.0, "initial_spread": 5.0},
+      {"name": "COPPER",      "initial_price": 385.0,  "initial_spread": 1.0},
+      {"name": "NATURAL_GAS", "initial_price": 250.0,  "initial_spread": 2.0}
+    ]
   },
   "agents": {
     "market_maker": {

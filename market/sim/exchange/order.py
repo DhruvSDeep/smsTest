@@ -61,6 +61,7 @@ class Order:
     order_type: OrderType
     price: Optional[float]
     quantity: float
+    commodity: str
     timestamp: float = field(compare=True)
     filled_quantity: float = field(default=0.0, compare=False)
     canceled: bool = field(default=False, compare=False)
@@ -163,6 +164,7 @@ class Trade:
     price: float
     quantity: float
     timestamp: float
+    commodity: str = ""
     taker_side: Optional[Side] = None
 
     def __repr__(self) -> str:

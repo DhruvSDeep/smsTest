@@ -45,14 +45,30 @@ class AgentConfig:
 
 
 @dataclass
+class CommodityConfig:
+    """Configuration for a single commodity.
+
+    Attributes:
+        name: Commodity identifier (e.g. "WHEAT", "CRUDE_OIL")
+        initial_price: Starting price for this commodity
+        initial_spread: Initial bid-ask spread for this commodity
+    """
+
+    name: str = "DEFAULT"
+    initial_price: float = 100.0
+    initial_spread: float = 1.0
+
+
+@dataclass
 class MarketConfig:
     """Market environment configuration.
 
     Attributes:
-        initial_price: Starting price
-        initial_spread: Initial bid-ask spread
+        initial_price: Fallback starting price (used when commodities list is empty)
+        initial_spread: Fallback initial bid-ask spread
         enable_fundamentals: Whether to track fundamentals
         enable_regimes: Whether to use regime switching
+        commodities: Per-commodity configurations (up to 5)
     """
 
     initial_price: float = 100.0
@@ -60,6 +76,7 @@ class MarketConfig:
     enable_fundamentals: bool = False
     enable_regimes: bool = False
     regime_change_prob: float = 0.05
+    commodities: List[CommodityConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -108,7 +125,10 @@ class SimulationConfig:
         )
         agent = AgentConfig(**agent_config) if agent_config else AgentConfig()
         agents = [AgentConfig(**item) for item in agents_config]
+        commodities_raw = market_config.pop("commodities", [])
+        commodities = [CommodityConfig(**c) for c in commodities_raw]
         market = MarketConfig(**market_config) if market_config else MarketConfig()
+        market.commodities = commodities
 
         # Create main config
         return cls(
@@ -158,6 +178,14 @@ class SimulationConfig:
                 "enable_fundamentals": self.market.enable_fundamentals,
                 "enable_regimes": self.market.enable_regimes,
                 "regime_change_prob": self.market.regime_change_prob,
+                "commodities": [
+                    {
+                        "name": c.name,
+                        "initial_price": c.initial_price,
+                        "initial_spread": c.initial_spread,
+                    }
+                    for c in self.market.commodities
+                ],
             },
         }
 

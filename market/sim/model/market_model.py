@@ -5,10 +5,9 @@ This is the main Mesa Model that orchestrates the entire market simulation.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from mesa import Model
-from mesa.time import Schedule
 
 from ..exchange import MatchingEngine
 from ..agents import TradingAgent, Strategy, get_loader
@@ -18,15 +17,27 @@ from .scheduler_logic import MarketEnvironment
 if TYPE_CHECKING:
     from ..agents.strategy_interface import Observation
 
+# Default 5 commodities with initial prices and spreads
+DEFAULT_COMMODITIES = [
+    {"name": "WHEAT",       "initial_price": 550.0,  "initial_spread": 2.0},
+    {"name": "CRUDE_OIL",   "initial_price": 75.0,   "initial_spread": 0.5},
+    {"name": "GOLD",        "initial_price": 1950.0, "initial_spread": 5.0},
+    {"name": "COPPER",      "initial_price": 385.0,  "initial_spread": 1.0},
+    {"name": "NATURAL_GAS", "initial_price": 250.0,  "initial_spread": 2.0},
+]
+
 
 class MarketModel(Model):
     """Market simulation model - the central orchestrator.
 
+    Supports multiple commodities, each with its own independent order book
+    and market environment. Agents are each assigned one commodity.
+
     Responsibilities:
     - Simulation clock management
-    - Tick orchestration (build observation, query agents, match, distribute fills)
+    - Tick orchestration
     - Agent registry (add/remove agents, swap strategies)
-    - Market environment state (fundamentals, noise, regimes)
+    - Per-commodity market environment state
     - Metrics collection via DataCollector
     """
 
@@ -42,18 +53,24 @@ class MarketModel(Model):
         enable_fundamentals: bool = False,
         enable_regimes: bool = False,
         regime_change_prob: float = 0.05,
+        commodity_configs: Optional[List[Dict]] = None,
         **kwargs,
     ):
         """Initialize the market model.
 
         Args:
             seed: Random seed for reproducibility
-            num_agents: Number of trading agents
+            num_agents: Number of trading agents (spread round-robin across commodities)
             initial_cash: Starting cash for each agent
-            initial_price: Initial midprice
+            initial_price: Fallback initial price when commodity_configs not provided
             tick_interval: Time between ticks
             agent_strategy: Default strategy for agents
             agent_params: Parameters for strategy
+            enable_fundamentals: Whether to track fundamental values
+            enable_regimes: Whether to use regime switching
+            regime_change_prob: Probability of regime change per tick
+            commodity_configs: List of dicts with keys: name, initial_price, initial_spread.
+                               Defaults to 5 built-in commodities.
             **kwargs: Additional arguments for Mesa Model
         """
         super().__init__(seed=seed, **kwargs)
@@ -62,41 +79,57 @@ class MarketModel(Model):
         self._tick_count: float = 0.0
         self.tick_interval = tick_interval
 
-        # Exchange
-        self.exchange = MatchingEngine()
+        # Commodity configuration
+        if commodity_configs:
+            self._commodity_configs: List[Dict] = list(commodity_configs)
+        else:
+            self._commodity_configs = list(DEFAULT_COMMODITIES)
 
-        # Agent scheduler - iterate over agents manually for Mesa 3.x
-        # (No separate scheduler needed - use model's agents property)
+        self.commodities: List[str] = [c["name"] for c in self._commodity_configs]
+        self._commodity_prices: Dict[str, float] = {
+            c["name"]: c.get("initial_price", initial_price)
+            for c in self._commodity_configs
+        }
+        self._commodity_spreads: Dict[str, float] = {
+            c["name"]: c.get("initial_spread", 1.0)
+            for c in self._commodity_configs
+        }
+
+        # Exchange (one order book per commodity)
+        self.exchange = MatchingEngine(self.commodities)
 
         # Strategy loader
         self.strategy_loader = get_loader()
 
-        # Market environment
-        self.environment = MarketEnvironment(
-            initial_price=initial_price,
-            seed=seed,
-            enable_fundamentals=enable_fundamentals,
-            enable_regimes=enable_regimes,
-            regime_change_prob=regime_change_prob,
-        )
+        # Per-commodity market environments
+        self.environments: Dict[str, MarketEnvironment] = {
+            c: MarketEnvironment(
+                initial_price=self._commodity_prices[c],
+                seed=seed,
+                enable_fundamentals=enable_fundamentals,
+                enable_regimes=enable_regimes,
+                regime_change_prob=regime_change_prob,
+            )
+            for c in self.commodities
+        }
 
         # Agent registry
         self._agents: Dict[int, TradingAgent] = {}
         self._latest_news: Optional[NewsEvent] = None
 
-        # Create agents
+        # Create agents (round-robin commodity assignment)
         agent_params = agent_params or {}
         for i in range(num_agents):
-            # Create strategy
+            commodity = self.commodities[i % len(self.commodities)]
             strategy_kwargs = dict(agent_params)
             strategy_kwargs.setdefault("seed", self.random.randrange(2**32))
             strategy = self.strategy_loader.create(agent_strategy, **strategy_kwargs)
 
-            # Create agent
             agent = TradingAgent(
                 model=self,
                 strategy=strategy,
                 initial_cash=initial_cash,
+                commodity=commodity,
             )
             self._agents[agent.unique_id] = agent
 
@@ -108,7 +141,7 @@ class MarketModel(Model):
         self._setup_data_collection()
 
         # Initial market state
-        self._initialize_market(initial_price)
+        self._initialize_market()
 
     def _setup_data_collection(self) -> None:
         """Set up Mesa DataCollector for metrics."""
@@ -116,46 +149,59 @@ class MarketModel(Model):
 
         self.datacollector = MetricsDataCollector(self)
 
-    def _initialize_market(self, initial_price: float) -> None:
-        """Initialize market with initial orders.
-
-        Creates a simple order book to start with a spread.
-        """
+    def _initialize_market(self) -> None:
+        """Seed each commodity's order book with initial bid/ask orders."""
         from ..exchange import OrderType, Side
 
         if not self._agents:
             return
 
-        # Add some initial orders to create a spread
-        # This ensures there's always something to trade against
+        agents_list = list(self._agents.values())
 
-        # Create a few bid orders below initial price
-        for i, price in enumerate(
-            [initial_price - 0.5, initial_price - 1.0, initial_price - 1.5]
-        ):
-            agent = list(self._agents.values())[i % len(self._agents)]
-            order = self.exchange.create_order(
-                agent_id=agent.unique_id,
-                side=Side.BID,
-                order_type=OrderType.LIMIT,
-                quantity=10.0,
-                price=price,
-            )
-            self.exchange.submit_order(order)
+        for commodity in self.commodities:
+            initial_price = self._commodity_prices[commodity]
+            initial_spread = self._commodity_spreads[commodity]
+            half = initial_spread / 2.0
 
-        # Create a few ask orders above initial price
-        for i, price in enumerate(
-            [initial_price + 0.5, initial_price + 1.0, initial_price + 1.5]
-        ):
-            agent = list(self._agents.values())[(i + 3) % len(self._agents)]
-            order = self.exchange.create_order(
-                agent_id=agent.unique_id,
-                side=Side.ASK,
-                order_type=OrderType.LIMIT,
-                quantity=10.0,
-                price=price,
-            )
-            self.exchange.submit_order(order)
+            # Agents assigned to this commodity
+            commodity_agents = [a for a in agents_list if a.commodity == commodity]
+            if not commodity_agents:
+                commodity_agents = agents_list  # fallback
+
+            bid_prices = [
+                initial_price - half,
+                initial_price - half * 2,
+                initial_price - half * 3,
+            ]
+            ask_prices = [
+                initial_price + half,
+                initial_price + half * 2,
+                initial_price + half * 3,
+            ]
+
+            for i, price in enumerate(bid_prices):
+                agent = commodity_agents[i % len(commodity_agents)]
+                order = self.exchange.create_order(
+                    agent_id=agent.unique_id,
+                    side=Side.BID,
+                    order_type=OrderType.LIMIT,
+                    quantity=10.0,
+                    commodity=commodity,
+                    price=price,
+                )
+                self.exchange.submit_order(order)
+
+            for i, price in enumerate(ask_prices):
+                agent = commodity_agents[(i + 3) % len(commodity_agents)]
+                order = self.exchange.create_order(
+                    agent_id=agent.unique_id,
+                    side=Side.ASK,
+                    order_type=OrderType.LIMIT,
+                    quantity=10.0,
+                    commodity=commodity,
+                    price=price,
+                )
+                self.exchange.submit_order(order)
 
     @property
     def tick(self) -> float:
@@ -168,27 +214,15 @@ class MarketModel(Model):
         return list(self._agents.values())
 
     def step(self) -> None:
-        """Execute one simulation step (tick).
-
-        The tick orchestration is:
-        1. Advance simulation clock
-        2. Update market environment (fundamentals, noise)
-        3. Build observation snapshot (handled by agents)
-        4. Activate all agents to generate orders (via scheduler)
-        5. Run matching (handled by exchange during order submission)
-        6. Update agent states (handled during fill processing)
-        7. Collect metrics
-        8. Update visualization state
-        """
-        # Advance tick counter
+        """Execute one simulation step (tick)."""
         self._tick_count += 1
         self.exchange.next_tick()
 
-        # Update market environment
-        self.environment.update(self._tick_count, self.random)
+        # Update all commodity environments
+        for env in self.environments.values():
+            env.update(self._tick_count, self.random)
 
-        # Activate agents - iterate over all registered agents
-        # Use self._agents.values() directly to avoid AgentSet issues
+        # Activate agents
         for agent in list(self._agents.values()):
             agent.step()
 
@@ -200,31 +234,33 @@ class MarketModel(Model):
         self,
         strategy: Optional[Strategy] = None,
         initial_cash: float = 10000.0,
+        commodity: Optional[str] = None,
     ) -> TradingAgent:
         """Add a new trading agent.
 
         Args:
             strategy: Trading strategy (optional, uses default if None)
             initial_cash: Starting cash
+            commodity: Commodity to assign (defaults to first commodity)
 
         Returns:
             The created agent
         """
-        # Use default strategy if none provided
         if strategy is None:
             strategy = self.strategy_loader.create(
                 "random", seed=self.random.randrange(2**32)
             )
 
-        # Create agent
+        if commodity is None:
+            commodity = self.commodities[0]
+
         agent = TradingAgent(
             model=self,
             strategy=strategy,
             initial_cash=initial_cash,
+            commodity=commodity,
         )
-
         self._agents[agent.unique_id] = agent
-
         return agent
 
     @property
@@ -232,15 +268,8 @@ class MarketModel(Model):
         """Most recently broadcast structured news event."""
         return self._latest_news
 
-    def broadcast_news(self, news: Optional[NewsEvent | Dict]) -> Optional[NewsEvent]:
-        """Broadcast a structured news event to all agents.
-
-        Args:
-            news: A `NewsEvent`, configuration dictionary, or `None` to clear
-
-        Returns:
-            The normalized broadcast event
-        """
+    def broadcast_news(self, news: Optional["NewsEvent | Dict"]) -> Optional[NewsEvent]:
+        """Broadcast a structured news event to all agents."""
         event: Optional[NewsEvent]
         if isinstance(news, dict):
             event = NewsEvent.from_dict(news)
@@ -254,37 +283,22 @@ class MarketModel(Model):
         return event
 
     def remove_agent(self, agent_id: int) -> Optional[TradingAgent]:
-        """Remove an agent.
-
-        Args:
-            agent_id: ID of the agent to remove
-
-        Returns:
-            The removed agent, or None if not found
-        """
+        """Remove an agent."""
         agent = self._agents.pop(agent_id, None)
         if agent is not None:
-            for order in self.exchange.order_book.get_orders_for_agent(agent_id):
-                self.exchange.order_book.remove_order(order.order_id)
+            ob = self.exchange.get_order_book(agent.commodity)
+            for order in ob.get_orders_for_agent(agent_id):
+                ob.remove_order(order.order_id)
             agent._pending_orders.clear()
             agent.remove()
 
         return agent
 
     def swap_strategy(self, agent_id: int, strategy: Strategy) -> bool:
-        """Swap an agent's strategy (hot swap).
-
-        Args:
-            agent_id: ID of the agent
-            strategy: New strategy instance
-
-        Returns:
-            True if successful, False if agent not found
-        """
+        """Swap an agent's strategy (hot swap)."""
         agent = self._agents.get(agent_id)
         if agent is None:
             return False
-
         agent.set_strategy(strategy)
         return True
 
@@ -292,56 +306,51 @@ class MarketModel(Model):
         """Get an agent by ID."""
         return self._agents.get(agent_id)
 
-    def get_market_state(self) -> Dict:
-        """Get comprehensive market state.
+    def get_market_state(self, commodity: Optional[str] = None) -> Dict:
+        """Get comprehensive market state for a commodity.
+
+        Args:
+            commodity: Commodity name (defaults to first commodity)
 
         Returns:
-            Dictionary with market state
+            Dictionary with market state for the given commodity
         """
-        state = self.exchange.get_market_state()
+        commodity = commodity or self.commodities[0]
+        state = self.exchange.get_market_state(commodity)
         state["tick"] = self._tick_count
-        state["environment"] = self.environment.get_state()
+        state["environment"] = self.environments[commodity].get_state()
         state["num_agents"] = len(self._agents)
         state["news"] = self._latest_news.to_dict() if self._latest_news else None
-
         return state
 
-    def get_agent_metrics(self) -> List[Dict]:
-        """Get metrics for all agents.
+    def get_all_market_states(self) -> Dict[str, Dict]:
+        """Get market state for all commodities.
 
         Returns:
-            List of agent state dictionaries
+            Dict mapping commodity name -> market state dict
         """
+        return {c: self.get_market_state(c) for c in self.commodities}
+
+    def get_agent_metrics(self) -> List[Dict]:
+        """Get metrics for all agents."""
         return [agent.get_state() for agent in self._agents.values()]
 
     def get_leaderboard(self) -> List[Dict]:
-        """Get agent leaderboard sorted by PnL.
-
-        Returns:
-            List of agents sorted by total_pnl
-        """
+        """Get agent leaderboard sorted by PnL."""
         leaderboard = self.get_agent_metrics()
         leaderboard.sort(key=lambda x: x["total_pnl"], reverse=True)
         return leaderboard
 
     def reset(self, keep_agents: bool = True) -> None:
-        """Reset the simulation.
-
-        Args:
-            keep_agents: If True, keep existing agents but reset their state
-        """
-        # Reset exchange
+        """Reset the simulation."""
         self.exchange.reset()
-
-        # Reset tick counter
         self._tick_count = 0.0
 
-        # Reset environment
-        self.environment.reset()
+        for env in self.environments.values():
+            env.reset()
         self._latest_news = None
 
         if keep_agents:
-            # Reset agent states
             for agent in self._agents.values():
                 agent.cash = agent.initial_cash
                 agent.position = 0.0
@@ -353,14 +362,14 @@ class MarketModel(Model):
                 if agent.strategy is not None:
                     agent.strategy.reset()
         else:
-            # Clear all agents
             self._agents.clear()
-            # Re-register with model
 
     def __repr__(self) -> str:
+        first = self.commodities[0] if self.commodities else "?"
+        ob = self.exchange.get_order_book(first)
         return (
             f"MarketModel(tick={self._tick_count}, "
+            f"commodities={self.commodities}, "
             f"agents={len(self._agents)}, "
-            f"best_bid={self.exchange.order_book.best_bid}, "
-            f"best_ask={self.exchange.order_book.best_ask})"
+            f"{first}: bid={ob.best_bid}, ask={ob.best_ask})"
         )

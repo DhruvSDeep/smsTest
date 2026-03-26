@@ -55,85 +55,55 @@ def create_model_from_config(config: Dict) -> MarketModel:
     Returns:
         MarketModel instance
     """
-    # Get config values
     seed = config.get("seed", 42)
     market_config = config.get("market", {})
-    initial_price = market_config.get("initial_price", 100.0)
     exchange_config = config.get("exchange", {})
     tick_interval = exchange_config.get("tick_interval", 1.0)
 
-    # Create model with default agents for initial order book
+    # Build per-commodity configs (up to 5)
+    commodity_configs = market_config.get("commodities", [])
+    if not commodity_configs:
+        # Fallback: single commodity from initial_price
+        initial_price = market_config.get("initial_price", 100.0)
+        commodity_configs = [{"name": "DEFAULT", "initial_price": initial_price, "initial_spread": 1.0}]
+
+    # Create model with no agents initially
     model = MarketModel(
         seed=seed,
-        initial_price=initial_price,
+        num_agents=0,
         tick_interval=tick_interval,
+        commodity_configs=commodity_configs,
     )
 
-    # Save initial order book state before clearing agents
-    # The model already initialized with some orders in the book
-
-    # Clear default agents
-    for agent_id in list(model._agents.keys()):
-        model.remove_agent(agent_id)
-
-    # Add agents from config
+    # Add agents from config with round-robin commodity assignment
     agent_configs = config.get("agents", {})
     strategy_loader = get_loader()
 
     total_agents = 0
-    agents_list = []
+    agent_index = 0
     for strategy_name, agent_config in agent_configs.items():
         count = agent_config.get("count", 0)
         initial_cash = agent_config.get("initial_cash", 10000.0)
         strategy_params = agent_config.get("strategy_params", {})
 
         for _ in range(count):
-            # Create strategy
+            commodity = model.commodities[agent_index % len(model.commodities)]
             strategy_kwargs = dict(strategy_params)
             strategy_kwargs.setdefault("seed", model.random.randrange(2**32))
             strategy = strategy_loader.create(strategy_name, **strategy_kwargs)
 
-            # Create agent
-            agent = model.add_agent(
+            model.add_agent(
                 strategy=strategy,
                 initial_cash=initial_cash,
+                commodity=commodity,
             )
-            agents_list.append(agent)
             total_agents += 1
+            agent_index += 1
 
-    # Re-add initial orders after adding agents
-    # This ensures the order book has both bids and asks
-    from sim.exchange import OrderType, Side
+    # Seed all commodity order books with initial orders
+    model._initialize_market()
 
-    # Create initial bids below midprice
-    for i, price in enumerate(
-        [initial_price - 0.5, initial_price - 1.0, initial_price - 1.5]
-    ):
-        agent = agents_list[i % len(agents_list)]
-        order = model.exchange.create_order(
-            agent_id=agent.unique_id,
-            side=Side.BID,
-            order_type=OrderType.LIMIT,
-            quantity=10.0,
-            price=price,
-        )
-        model.exchange.submit_order(order)
-
-    # Create initial asks above midprice
-    for i, price in enumerate(
-        [initial_price + 0.5, initial_price + 1.0, initial_price + 1.5]
-    ):
-        agent = agents_list[(i + 3) % len(agents_list)]
-        order = model.exchange.create_order(
-            agent_id=agent.unique_id,
-            side=Side.ASK,
-            order_type=OrderType.LIMIT,
-            quantity=10.0,
-            price=price,
-        )
-        model.exchange.submit_order(order)
-
-    print(f"Created {total_agents} agents")
+    print(f"Created {total_agents} agents across {len(model.commodities)} commodities: {model.commodities}")
     return model
 
 
@@ -177,6 +147,7 @@ def run_simulation(
     max_steps: int,
     verbose: bool = False,
     news_schedule: Optional[Dict[int, List[NewsEvent]]] = None,
+    commodity: Optional[str] = None,
 ) -> List[Dict]:
     """Run the simulation and collect market data.
 
@@ -188,6 +159,7 @@ def run_simulation(
     Returns:
         List of market state dictionaries
     """
+    commodity = commodity or model.commodities[0]
     market_history = []
     total_trades_count = 0
     trade_history: List[Dict] = []
@@ -219,8 +191,8 @@ def run_simulation(
 
         model.step()
 
-        # Collect market state
-        state = model.get_market_state()
+        # Collect market state for the selected commodity
+        state = model.get_market_state(commodity)
 
         # Count trades from this step
         step_trades = [trade_to_dict(trade) for trade in state.get("last_trades", [])]
@@ -233,7 +205,7 @@ def run_simulation(
         if price is not None:
             price_history.append(price)
 
-        snapshot = get_market_snapshot(model.exchange, trade_history, price_history)
+        snapshot = get_market_snapshot(model.exchange, trade_history, price_history, commodity=commodity)
         state["market_stats"] = {
             "tick": snapshot.tick,
             "midprice": snapshot.midprice,
@@ -279,7 +251,7 @@ def run_simulation(
 
             # Show visualization tables in verbose mode
             if verbose:
-                depth = model.exchange.get_depth_snapshot(depth=5)
+                depth = model.exchange.get_depth_snapshot(commodity, depth=5)
                 print("\n--- Market State ---")
                 print(market_table.format(state))
                 print("\n--- Best Bid / Ask ---")
@@ -354,8 +326,9 @@ def visualize_market(
     price_ax.plot(
         ticks, best_asks, label="Best Ask", linewidth=1.0, color="red", alpha=0.7
     )
+    commodity_label = market_history[0].get("commodity", "") if market_history else ""
     price_ax.set_ylabel("Price", fontsize=11)
-    price_ax.set_title("Market Simulation Report", fontsize=14)
+    price_ax.set_title(f"Market Simulation Report — {commodity_label}", fontsize=14)
     price_ax.legend(loc="upper left")
     price_ax.grid(True, alpha=0.3)
 
@@ -429,19 +402,21 @@ def visualize_market(
         plt.show()
 
 
-def print_summary(model: MarketModel, market_history: List[Dict]) -> None:
+def print_summary(model: MarketModel, market_history: List[Dict], commodity: Optional[str] = None) -> None:
     """Print a richer simulation report using metrics and visualization helpers."""
     if not market_history:
         print("No data to summarize")
         return
+
+    commodity = commodity or model.commodities[0]
 
     # Get final state
     final = market_history[-1]
     trade_history = model._visualization_data.get("trade_history", [])
     price_history = model._visualization_data.get("price_history", [])
     leaderboard = model.get_leaderboard()
-    depth = model.exchange.get_depth_snapshot(depth=5)
-    snapshot = get_market_snapshot(model.exchange, trade_history, price_history)
+    depth = model.exchange.get_depth_snapshot(commodity, depth=5)
+    snapshot = get_market_snapshot(model.exchange, trade_history, price_history, commodity=commodity)
     order_flow = calculate_order_flow(trade_history)
     returns = calculate_returns(price_history)
     volatility = calculate_volatility(price_history)
@@ -530,7 +505,18 @@ def print_summary(model: MarketModel, market_history: List[Dict]) -> None:
 
 
 def main():
-    """Main entry point."""
+    """Main entry point.
+
+    Usage:
+        python visualise.py [commodity]
+
+    Args:
+        commodity: Optional commodity name to visualize (e.g. WHEAT, CRUDE_OIL).
+                   Defaults to the first commodity in config.
+    """
+    # Optional commodity argument
+    selected_commodity: Optional[str] = sys.argv[1] if len(sys.argv) > 1 else None
+
     # Determine config path
     config_path = Path(__file__).parent / "config.json"
 
@@ -546,13 +532,24 @@ def main():
     print("Creating market model...")
     model = create_model_from_config(config)
 
+    # Validate commodity selection
+    if selected_commodity is None:
+        selected_commodity = model.commodities[0]
+    elif selected_commodity not in model.commodities:
+        print(f"Unknown commodity '{selected_commodity}'. Available: {model.commodities}")
+        sys.exit(1)
+
+    print(f"Visualizing commodity: {selected_commodity}")
+
     # Run simulation
     max_steps = config.get("max_steps", 500)
     news_schedule = build_news_schedule(config)
-    market_history = run_simulation(model, max_steps, news_schedule=news_schedule)
+    market_history = run_simulation(
+        model, max_steps, news_schedule=news_schedule, commodity=selected_commodity
+    )
 
     # Print summary
-    print_summary(model, market_history)
+    print_summary(model, market_history, commodity=selected_commodity)
 
     # Visualize
     print("\nGenerating market report chart...")

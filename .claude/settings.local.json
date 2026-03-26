@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -3 -c \"import sys; print\\(sys.path\\)\")",
+      "Read(//c/Users/dhruv/OneDrive/Documents/Python/**)",
+      "Bash(cd:*)",
+      "Bash(py:*)",
+      "Bash(C:\\\\Users\\\\dhruv\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe -c \"import mesa; print\\(mesa.__version__\\)\" 2>&1)",
+      "Bash(\"/c/Users/dhruv/AppData/Local/Python/pythoncore-3.14-64/python.exe\" -c \"import mesa; print\\(mesa.__version__\\)\" 2>&1)",
+      "Bash(\"/c/Users/dhruv/AppData/Local/Python/pythoncore-3.14-64/python.exe\" -m pip install networkx 2>&1 | tail -3)",
+      "Bash(PYTHON=\"/c/Users/dhruv/AppData/Local/Python/pythoncore-3.14-64/python.exe\" && cd \"/c/Users/dhruv/OneDrive/Documents/Python/sms/sms/market\" && \"$PYTHON\" -c \"\nimport sys, json\nsys.path.insert\\(0, '.'\\)\nfrom visualise import load_config, create_model_from_config\n\nconfig = load_config\\('config.json'\\)\nmodel = create_model_from_config\\(config\\)\n\nfrom collections import Counter\nc = Counter\\(a.commodity for a in model._agents.values\\(\\)\\)\nprint\\('Agents per commodity:', dict\\(c\\)\\)\n\nfor _ in range\\(10\\):\n    model.step\\(\\)\n\nfor commodity in model.commodities:\n    state = model.get_market_state\\(commodity\\)\n    print\\(f'{commodity}: bid={state[\\\\\"best_bid\\\\\"]:.2f}, ask={state[\\\\\"best_ask\\\\\"]:.2f}, trades={len\\(state[\\\\\"last_trades\\\\\"]\\)}'\\)\nprint\\('OK'\\)\n\" 2>&1)"
+    ]
+  }
+}

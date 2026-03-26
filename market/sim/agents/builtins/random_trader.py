@@ -92,6 +92,7 @@ class RandomTraderStrategy(Strategy):
                     side=side,
                     order_type=OrderType.MARKET,
                     quantity=quantity,
+                    commodity=observation.commodity,
                     price=None,
                 )
             ]
@@ -127,6 +128,7 @@ class RandomTraderStrategy(Strategy):
                 side=side,
                 order_type=OrderType.LIMIT,
                 quantity=quantity,
+                commodity=observation.commodity,
                 price=price,
             )
         ]

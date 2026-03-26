@@ -41,13 +41,13 @@ class MetricsDataCollector:
         """Get model-level reporters."""
         return {
             "tick": lambda m: m.tick,
-            "best_bid": lambda m: m.exchange.order_book.best_bid,
-            "best_ask": lambda m: m.exchange.order_book.best_ask,
-            "midprice": lambda m: m.exchange.order_book.midprice,
-            "spread": lambda m: m.exchange.order_book.spread,
-            "bid_volume": lambda m: m.exchange.order_book.get_total_volume(Side.BID),
-            "ask_volume": lambda m: m.exchange.order_book.get_total_volume(Side.ASK),
-            "order_count": lambda m: len(m.exchange.order_book),
+            "best_bid": lambda m: m.exchange.get_order_book(m.commodities[0]).best_bid,
+            "best_ask": lambda m: m.exchange.get_order_book(m.commodities[0]).best_ask,
+            "midprice": lambda m: m.exchange.get_order_book(m.commodities[0]).midprice,
+            "spread": lambda m: m.exchange.get_order_book(m.commodities[0]).spread,
+            "bid_volume": lambda m: m.exchange.get_order_book(m.commodities[0]).get_total_volume(Side.BID),
+            "ask_volume": lambda m: m.exchange.get_order_book(m.commodities[0]).get_total_volume(Side.ASK),
+            "order_count": lambda m: len(m.exchange.get_order_book(m.commodities[0])),
         }
 
     def _get_agent_reporters(self) -> Dict[str, Callable]:

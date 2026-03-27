@@ -1,0 +1,57 @@
+{
+  "seed": 4342,
+  "max_steps": 500,
+  "exchange": {
+    "tick_interval": 1.0,
+    "max_order_size": 1000.0,
+    "min_order_size": 0.01,
+    "price_precision": 4
+  },
+  "market": {
+    "enable_fundamentals": false,
+    "enable_regimes": false,
+    "commodities": [
+      {"name": "WHEAT",       "initial_price": 550.0,  "initial_spread": 2.0},
+      {"name": "CRUDE_OIL",   "initial_price": 75.0,   "initial_spread": 0.5},
+      {"name": "GOLD",        "initial_price": 1950.0, "initial_spread": 5.0},
+      {"name": "COPPER",      "initial_price": 385.0,  "initial_spread": 1.0},
+      {"name": "NATURAL_GAS", "initial_price": 250.0,  "initial_spread": 2.0}
+    ]
+  },
+  "agents": {
+    "market_maker": {
+      "count": 5,
+      "initial_cash": 100000.0,
+      "strategy_params": {
+        "spread": 0.003,
+        "order_quantity": 20.0,
+        "max_position": 500.0
+      }
+    },
+    "liquidity_taker": {
+      "count": 8,
+      "initial_cash": 100000.0,
+      "strategy_params": {
+        "order_quantity": 15.0,
+        "probability": 0.9
+      }
+    },
+    "liquidity_maker": {
+      "count": 8,
+      "initial_cash": 100000.0,
+      "strategy_params": {
+        "order_quantity": 15.0,
+        "spread": 0.005,
+        "probability": 0.8
+      }
+    },
+    "random_trader": {
+      "count": 5,
+      "initial_cash": 100000.0,
+      "strategy_params": {
+        "order_quantity": 20.0,
+        "probability": 0.6
+      }
+    }
+  }
+}

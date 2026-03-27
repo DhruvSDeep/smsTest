@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run visualise.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sms/market/visualise.py",
+            "cwd": "${workspaceFolder}/sms/market",
+            "console": "integratedTerminal",
+            "args": ["WHEAT"]
+        }
+    ]
+}

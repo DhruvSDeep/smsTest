@@ -577,8 +577,9 @@ def main():
 
     # Validate commodity selection. Use "ALL" (case-insensitive) to request all commodities.
     if selected_commodity is None:
-        # default: single first commodity to preserve previous behavior
-        selected_commodity = model.commodities[0]
+        # default: visualize ALL commodities
+        selected_commodity = None
+        print("Visualizing all commodities (default)")
     elif selected_commodity.upper() == "ALL":
         # request all commodities by passing None to run_simulation
         selected_commodity = None

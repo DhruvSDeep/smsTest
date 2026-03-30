@@ -142,9 +142,9 @@ class LeaderboardTable:
 
         # Header
         lines.append(
-            f"{'Rank':>4} | {'Agent':>6} | {'Cash':>12} | {'Position':>10} | {'PnL':>12} | {'Return':>8}"
+            f"{'Rank':>4} | {'Agent':>6} | {'Strategy':>12} | {'Cash':>12} | {'Position':>10} | {'PnL':>12} | {'Return':>8}"
         )
-        lines.append("-" * 70)
+        lines.append("-" * 100)
 
         for rank, agent in enumerate(leaderboard[: self.max_agents], 1):
             agent_id = agent.get("agent_id", "?")
@@ -152,9 +152,10 @@ class LeaderboardTable:
             position = agent.get("net_position", 0)
             pnl = agent.get("total_pnl", 0)
             ret_pct = agent.get("return_pct", 0)
+            strategy = agent.get("strategy_type", "")
 
             lines.append(
-                f"{rank:>4} | {agent_id:>6} | {cash:>12.2f} | {position:>10.2f} | "
+                f"{rank:>4} | {agent_id:>6} | {strategy:>12} | {cash:>12.2f} | {position:>10.2f} | "
                 f"{pnl:>12.2f} | {ret_pct:>7.2f}%"
             )
 

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Type
 
 from .strategy_interface import Strategy, RandomStrategy
+import importlib
+import re
 
 
 class StrategyLoader:
@@ -29,22 +31,61 @@ class StrategyLoader:
         self._load_builtins()
 
     def _load_builtins(self) -> None:
-        """Load built-in strategies."""
-        from .builtins import (
-            EmptyStrategy,
-            RandomStrategy,
-            MarketMakerStrategy,
-            LiquidityTakerStrategy,
-            LiquidityMakerStrategy,
-            RandomTraderStrategy,
-        )
+        """Load built-in strategies.
+
+        This implementation dynamically discovers Python modules in the
+        `sim.agents.builtins` package and registers any classes that
+        subclass `Strategy`. It also registers the core `empty` and
+        `random` strategies from `strategy_interface`.
+        """
+        # Always register basic strategies from the interface
+        from .strategy_interface import EmptyStrategy
 
         self.register("empty", EmptyStrategy)
         self.register("random", RandomStrategy)
-        self.register("market_maker", MarketMakerStrategy)
-        self.register("liquidity_taker", LiquidityTakerStrategy)
-        self.register("liquidity_maker", LiquidityMakerStrategy)
-        self.register("random_trader", RandomTraderStrategy)
+
+        # Discover and import all modules in the builtins package
+        builtins_dir = Path(__file__).parent / "builtins"
+        if not builtins_dir.exists():
+            return
+
+        for path in builtins_dir.iterdir():
+            if path.suffix != ".py" or path.name.startswith("_"):
+                continue
+
+            module_name = f"sim.agents.builtins.{path.stem}"
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                # Skip modules that fail to import
+                continue
+
+            # Register any Strategy subclasses found in the module
+            for attr_name in dir(module):
+                obj = getattr(module, attr_name)
+                if not isinstance(obj, type):
+                    continue
+                if obj is Strategy:
+                    continue
+                try:
+                    if issubclass(obj, Strategy):
+                        # Determine registration names: file stem and
+                        # snake_case of class name (without 'Strategy')
+                        class_name = obj.__name__
+                        base = class_name
+                        if base.endswith("Strategy"):
+                            base = base[: -len("Strategy")]
+
+                        # CamelCase -> snake_case
+                        snake = re.sub(r"(?<!^)(?=[A-Z])", "_", base).lower()
+
+                        # register under module/file name and snake name
+                        self.register(path.stem.lower(), obj)
+                        if snake:
+                            self.register(snake, obj)
+                except Exception:
+                    # ignore non-class or non-subclass objects
+                    continue
 
     def register(self, name: str, strategy_class: Type[Strategy]) -> None:
         """Register a strategy class.

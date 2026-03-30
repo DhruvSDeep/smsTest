@@ -53,5 +53,15 @@
         "probability": 0.6
       }
     }
+    ,
+    "momentum_trader": {
+      "count": 6,
+      "initial_cash": 100000.0,
+      "strategy_params": {
+        "order_quantity": 15.0,
+        "lookback": 5,
+        "threshold": 0.002
+      }
+    }
   }
 }

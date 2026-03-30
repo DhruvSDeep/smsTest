@@ -436,9 +436,9 @@ def print_summary(model: MarketModel, market_history: "object", commodity: Optio
         for comm, history in market_history.items():
             print_summary(model, history, commodity=comm)
 
-        # After per-commodity summaries, print an overall leaderboard
+        # After per-commodity summaries, print an overall leaderboard (show ALL agents)
         overall = model.get_leaderboard()
-        leaderboard_table = LeaderboardTable(max_agents=20)
+        leaderboard_table = LeaderboardTable(max_agents=len(overall))
         print("\n" + "=" * 50)
         print("OVERALL LEADERBOARD (All Commodities)")
         print("=" * 50)

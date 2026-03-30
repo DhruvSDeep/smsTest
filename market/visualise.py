@@ -144,7 +144,7 @@ def run_simulation(
     verbose: bool = False,
     news_schedule: Optional[Dict[int, List[NewsEvent]]] = None,
     commodity: Optional[str] = None,
-) -> List[Dict]:
+) -> Dict[str, List[Dict]]:
     """Run the simulation and collect market data.
 
     Args:
@@ -155,17 +155,23 @@ def run_simulation(
     Returns:
         List of market state dictionaries
     """
-    commodity = commodity or model.commodities[0]
-    market_history = []
-    total_trades_count = 0
-    trade_history: List[Dict] = []
-    price_history: List[float] = []
+    # If a single commodity is requested, we will only collect that commodity's data.
+    # If commodity is None, collect data for all commodities in the model.
+    collect_all = commodity is None
+    commodities = model.commodities if collect_all else [commodity or model.commodities[0]]
+
+    # Prepare per-commodity containers
+    market_history_per: Dict[str, List[Dict]] = {c: [] for c in commodities}
+    total_trades_count_per: Dict[str, int] = {c: 0 for c in commodities}
+    trade_history_per: Dict[str, List[Dict]] = {c: [] for c in commodities}
+    price_history_per: Dict[str, List[float]] = {c: [] for c in commodities}
     news_schedule = news_schedule or {}
 
     # Initialize visualization components from the project
-    price_chart = PriceChart(max_points=max_steps)
-    spread_chart = SpreadChart(max_points=max_steps)
-    volume_chart = VolumeChart(max_points=max_steps)
+    # Create per-commodity chart objects
+    price_chart = {c: PriceChart(max_points=max_steps) for c in commodities}
+    spread_chart = {c: SpreadChart(max_points=max_steps) for c in commodities}
+    volume_chart = {c: VolumeChart(max_points=max_steps) for c in commodities}
 
     # Optional visualization tables
     market_table = MarketStateTable() if verbose else None
@@ -187,100 +193,106 @@ def run_simulation(
 
         model.step()
 
-        # Collect market state for the selected commodity
-        state = model.get_market_state(commodity)
+        # Collect market state for each requested commodity
+        for comm in commodities:
+            state = model.get_market_state(comm)
 
-        # Count trades from this step
-        step_trades = [trade_to_dict(trade) for trade in state.get("last_trades", [])]
-        total_trades_count += len(step_trades)
-        state["trades_count"] = total_trades_count
-        state["last_trades"] = step_trades
-        trade_history.extend(step_trades)
+            # Count trades from this step
+            step_trades = [trade_to_dict(trade) for trade in state.get("last_trades", [])]
+            total_trades_count_per[comm] += len(step_trades)
+            state["trades_count"] = total_trades_count_per[comm]
+            state["last_trades"] = step_trades
+            trade_history_per[comm].extend(step_trades)
 
-        price = effective_price(state)
-        if price is not None:
-            price_history.append(price)
+            price = effective_price(state)
+            if price is not None:
+                price_history_per[comm].append(price)
 
-        snapshot = get_market_snapshot(model.exchange, trade_history, price_history, commodity=commodity)
-        state["market_stats"] = {
-            "tick": snapshot.tick,
-            "midprice": snapshot.midprice,
-            "spread": snapshot.spread,
-            "spread_pct": snapshot.spread_pct,
-            "volatility": snapshot.volatility,
-            "bid_depth": snapshot.bid_depth,
-            "ask_depth": snapshot.ask_depth,
-            "trade_count": snapshot.trade_count,
-            "trade_volume": snapshot.trade_volume,
-        }
-        state["order_flow"] = calculate_order_flow(trade_history)
-        state["effective_price"] = price
+            snapshot = get_market_snapshot(model.exchange, trade_history_per[comm], price_history_per[comm], commodity=comm)
+            state["market_stats"] = {
+                "tick": snapshot.tick,
+                "midprice": snapshot.midprice,
+                "spread": snapshot.spread,
+                "spread_pct": snapshot.spread_pct,
+                "volatility": snapshot.volatility,
+                "bid_depth": snapshot.bid_depth,
+                "ask_depth": snapshot.ask_depth,
+                "trade_count": snapshot.trade_count,
+                "trade_volume": snapshot.trade_volume,
+            }
+            state["order_flow"] = calculate_order_flow(trade_history_per[comm])
+            state["effective_price"] = price
 
-        market_history.append(state)
+            market_history_per[comm].append(state)
 
-        # Update visualization charts
-        price_chart.add_point(
-            model.tick,
-            state.get("midprice"),
-            state.get("best_bid"),
-            state.get("best_ask"),
-        )
-        spread_chart.add_point(model.tick, state.get("spread"))
-        volume_chart.add_point(
-            model.tick,
-            state.get("bid_volume", 0),
-            state.get("ask_volume", 0),
-        )
+            # Update visualization charts for this commodity
+            price_chart[comm].add_point(
+                model.tick,
+                state.get("midprice"),
+                state.get("best_bid"),
+                state.get("best_ask"),
+            )
+            spread_chart[comm].add_point(model.tick, state.get("spread"))
+            volume_chart[comm].add_point(
+                model.tick,
+                state.get("bid_volume", 0),
+                state.get("ask_volume", 0),
+            )
 
         # Print progress
         if (step + 1) % 50 == 0:
-            midprice = state.get("midprice")
-            spread = state.get("spread")
-            volatility = state["market_stats"].get("volatility")
-            midprice_str = f"{midprice:.2f}" if midprice is not None else "N/A"
-            spread_str = f"{spread:.2f}" if spread is not None else "N/A"
-            volatility_str = f"{volatility:.4f}" if volatility is not None else "N/A"
-            print(
-                f"  Step {step + 1}/{max_steps}: midprice={midprice_str}, "
-                f"spread={spread_str}, vol={volatility_str}, total_trades={total_trades_count}"
-            )
-
-            # Show visualization tables in verbose mode
-            if verbose:
-                depth = model.exchange.get_depth_snapshot(commodity, depth=5)
-                print("\n--- Market State ---")
-                print(market_table.format(state))
-                print("\n--- Best Bid / Ask ---")
+            # Report progress for each commodity
+            for comm in commodities:
+                last = market_history_per[comm][-1]
+                midprice = last.get("midprice")
+                spread = last.get("spread")
+                volatility = last["market_stats"].get("volatility")
+                midprice_str = f"{midprice:.2f}" if midprice is not None else "N/A"
+                spread_str = f"{spread:.2f}" if spread is not None else "N/A"
+                volatility_str = f"{volatility:.4f}" if volatility is not None else "N/A"
                 print(
-                    best_bid_ask_view.format(
-                        state.get("best_bid"),
-                        state.get("best_ask"),
-                        state.get("spread"),
-                    )
+                    f"  Step {step + 1}/{max_steps} ({comm}): midprice={midprice_str}, "
+                    f"spread={spread_str}, vol={volatility_str}, total_trades={total_trades_count_per[comm]}"
                 )
-                print("\n--- Order Book ---")
-                print(orderbook_table.format(depth["bids"], depth["asks"]))
-                print("\n--- Order Book Histogram ---")
-                print(orderbook_view.format_histogram(depth["bids"], depth["asks"]))
-                print("\n--- Recent Trades ---")
-                print(trade_table.format(trade_history))
-                print("\n--- Leaderboard ---")
-                print(leaderboard_table.format(model.get_leaderboard()))
 
-    # Store charts in model for potential later use
-    model._visualization_data = {
-        "price_chart": price_chart.get_data(),
-        "spread_chart": spread_chart.get_data(),
-        "volume_chart": volume_chart.get_data(),
-        "trade_history": trade_history,
-        "price_history": price_history,
-    }
+                # Show visualization tables in verbose mode (per-commodity)
+                if verbose:
+                    depth = model.exchange.get_depth_snapshot(comm, depth=5)
+                    print(f"\n--- Market State ({comm}) ---")
+                    print(market_table.format(last))
+                    print(f"\n--- Best Bid / Ask ({comm}) ---")
+                    print(
+                        best_bid_ask_view.format(
+                            last.get("best_bid"),
+                            last.get("best_ask"),
+                            last.get("spread"),
+                        )
+                    )
+                    print(f"\n--- Order Book ({comm}) ---")
+                    print(orderbook_table.format(depth["bids"], depth["asks"]))
+                    print("\n--- Order Book Histogram ---")
+                    print(orderbook_view.format_histogram(depth["bids"], depth["asks"]))
+                    print("\n--- Recent Trades ---")
+                    print(trade_table.format(trade_history_per[comm]))
+                    print("\n--- Leaderboard ---")
+                    print(leaderboard_table.format(model.get_leaderboard()))
 
-    return market_history
+    # Store charts and histories in model for potential later use (per-commodity)
+    model._visualization_data = {}
+    for comm in commodities:
+        model._visualization_data[comm] = {
+            "price_chart": price_chart[comm].get_data(),
+            "spread_chart": spread_chart[comm].get_data(),
+            "volume_chart": volume_chart[comm].get_data(),
+            "trade_history": trade_history_per[comm],
+            "price_history": price_history_per[comm],
+        }
+
+    return market_history_per
 
 
 def visualize_market(
-    market_history: List[Dict], output_path: Optional[str] = None
+    market_history: "object", output_path: Optional[str] = None
 ) -> None:
     """Visualize market data using a richer multi-panel matplotlib report.
 
@@ -296,6 +308,20 @@ def visualize_market(
 
         subprocess.check_call([sys.executable, "-m", "pip", "install", "matplotlib"])
         import matplotlib.pyplot as plt
+
+    # If a dict of commodities was passed, render a separate chart per commodity
+    if isinstance(market_history, dict):
+        out_dir = None
+        if output_path:
+            out_dir = Path(output_path)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+        for comm, history in market_history.items():
+            out_file = None
+            if out_dir:
+                out_file = str(out_dir / f"market_report_{comm}.png")
+            visualize_market(history, output_path=out_file)
+        return
 
     # Extract data
     ticks = [s["tick"] for s in market_history]
@@ -398,8 +424,27 @@ def visualize_market(
         plt.show()
 
 
-def print_summary(model: MarketModel, market_history: List[Dict], commodity: Optional[str] = None) -> None:
-    """Print a richer simulation report using metrics and visualization helpers."""
+def print_summary(model: MarketModel, market_history: "object", commodity: Optional[str] = None) -> None:
+    """Print a richer simulation report using metrics and visualization helpers.
+
+    Accepts either a single-commodity `market_history` (List[Dict]) or a dict mapping
+    commodity -> List[Dict]. If a dict is provided, the function will print a summary
+    for each commodity.
+    """
+    # If a dict of commodities is provided, summarize each commodity separately
+    if isinstance(market_history, dict):
+        for comm, history in market_history.items():
+            print_summary(model, history, commodity=comm)
+
+        # After per-commodity summaries, print an overall leaderboard
+        overall = model.get_leaderboard()
+        leaderboard_table = LeaderboardTable(max_agents=20)
+        print("\n" + "=" * 50)
+        print("OVERALL LEADERBOARD (All Commodities)")
+        print("=" * 50)
+        print(leaderboard_table.format(overall))
+        return
+
     if not market_history:
         print("No data to summarize")
         return
@@ -408,8 +453,10 @@ def print_summary(model: MarketModel, market_history: List[Dict], commodity: Opt
 
     # Get final state
     final = market_history[-1]
-    trade_history = model._visualization_data.get("trade_history", [])
-    price_history = model._visualization_data.get("price_history", [])
+    # Pull trade/price history for this commodity from model visualization data
+    vis = model._visualization_data.get(commodity, {})
+    trade_history = vis.get("trade_history", [])
+    price_history = vis.get("price_history", [])
     leaderboard = model.get_leaderboard()
     depth = model.exchange.get_depth_snapshot(commodity, depth=5)
     snapshot = get_market_snapshot(model.exchange, trade_history, price_history, commodity=commodity)
@@ -432,7 +479,7 @@ def print_summary(model: MarketModel, market_history: List[Dict], commodity: Opt
     leaderboard_table = LeaderboardTable(max_agents=10)
 
     print("\n" + "=" * 50)
-    print("SIMULATION SUMMARY")
+    print(f"SIMULATION SUMMARY — {commodity}")
     print("=" * 50)
     print(f"Total ticks: {final.get('tick', 0)}")
 
@@ -528,14 +575,19 @@ def main():
     print("Creating market model...")
     model = create_model_from_config(config)
 
-    # Validate commodity selection
+    # Validate commodity selection. Use "ALL" (case-insensitive) to request all commodities.
     if selected_commodity is None:
+        # default: single first commodity to preserve previous behavior
         selected_commodity = model.commodities[0]
+    elif selected_commodity.upper() == "ALL":
+        # request all commodities by passing None to run_simulation
+        selected_commodity = None
+        print("Visualizing all commodities")
     elif selected_commodity not in model.commodities:
         print(f"Unknown commodity '{selected_commodity}'. Available: {model.commodities}")
         sys.exit(1)
-
-    print(f"Visualizing commodity: {selected_commodity}")
+    else:
+        print(f"Visualizing commodity: {selected_commodity}")
 
     # Run simulation
     max_steps = config.get("max_steps", 500)
@@ -549,8 +601,9 @@ def main():
 
     # Visualize
     print("\nGenerating market report chart...")
-    output_path = Path(__file__).parent / "market_report.png"
-    visualize_market(market_history, str(output_path))
+    # If multiple commodities, save per-commodity charts into the script directory
+    output_dir = Path(__file__).parent
+    visualize_market(market_history, str(output_dir))
 
     print("\nDone!")
 
